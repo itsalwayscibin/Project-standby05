@@ -3,10 +3,11 @@
 import time
 import rclpy
 from rclpy.node import Node
+from std_srvs.srv import Empty
 from geometry_msgs.msg import PoseStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from tf_transformations import quaternion_from_euler
-from ebot_nav2.srv import Order 
+from ebot_nav2.srv import Order
 
 class ButlerNode(Node):
 
@@ -28,25 +29,12 @@ class ButlerNode(Node):
         self.navigator.waitUntilNav2Active()
         self.get_logger().info(" Navigation is active")
 
-
     def set_initial_pose(self):
-        '''
-        FUNCTION : it is to initiate nav2
-        INPUT : NO INPUT
-        OUTPUT : NO OUTPUT RETURNS
-        '''
-
         home = self.locations["home"]
         pose = self.create_pose(home[0], home[1], home[2])
         self.navigator.setInitialPose(pose)
 
     def create_pose(self, x, y, theta):
-        '''
-        FUNCTION : it is to create pose for navigation
-        INPUT : x,y,yaw
-        OUTPUT : pose to navigate
-
-        '''
         pose = PoseStamped()
         pose.header.frame_id = 'map'
         pose.header.stamp = self.navigator.get_clock().now().to_msg()
@@ -58,14 +46,8 @@ class ButlerNode(Node):
         return pose
 
     def go_to(self, location_name):
-        '''
-        FUNCTION : it is to navigate to the position or specific place
-        INPUT : pose or position
-        OUTPUT : result of navigation
-
-        '''
         coords = self.locations[location_name]
-        self.get_logger().info(f"➡️ Going to {location_name}...")
+        self.get_logger().info(f"Going to {location_name}...")
         goal_pose = self.create_pose(coords[0], coords[1], coords[2])
         self.navigator.goToPose(goal_pose)
         while not self.navigator.isTaskComplete():
@@ -80,12 +62,6 @@ class ButlerNode(Node):
             return False
 
     def wait_for_confirmation(self, timeout=15):
-        '''
-        FUNCTION : it is a function for verifiying the confirmation of the reciveing the order and deliverying the order
-        INPUT : x,y,yaw
-        OUTPUT : result of the order
-
-        '''
         self.get_logger().info(f" Waiting for confirmation ({timeout}s)...")
         start = time.time()
         while time.time() - start < timeout:
@@ -98,15 +74,10 @@ class ButlerNode(Node):
         return False
 
     def handle_order(self, request, response):
-        '''
-        FUNCTION : it is the callback function and processing will be done here
-        INPUT : request and response of the service call
-        OUTPUT : response of the request by the service call
-
-        '''
         table_numbers = request.table_no
         self.get_logger().info(f" Received order for tables: {table_numbers}")
 
+        #  Validate table numbers
         for table in table_numbers:
             table_key = f"table{table}"
             if table_key not in self.locations:
@@ -115,18 +86,20 @@ class ButlerNode(Node):
                 response.message = f"Invalid table: {table}"
                 return response
 
+        # Step 1: Go to kitchen
         if not self.go_to("kitchen"):
             response.success = False
             response.message = "Failed to go to kitchen"
             return response
 
         if not self.wait_for_confirmation():
-            self.get_logger().info(" Kitchen rejected Returning home.")
+            self.get_logger().info(" Kitchen rejected. Returning home.")
             self.go_to("home")
             response.success = False
             response.message = "Kitchen rejected"
             return response
-        
+
+        # Step 2: Go to each table
         for table in table_numbers:
             table_key = f"table{table}"
             if not self.go_to(table_key):
@@ -135,8 +108,9 @@ class ButlerNode(Node):
                 return response
 
             if not self.wait_for_confirmation():
-                self.get_logger().info(f" Table {table_key} rejected Returning to kitchen then home.")
+                self.get_logger().info(f" Table {table_key} rejected. Returning to kitchen then home.")
                 self.go_to("kitchen")
+                time.sleep(5.0)
                 self.go_to("home")
                 response.success = False
                 response.message = f"{table_key} rejected"
@@ -144,6 +118,7 @@ class ButlerNode(Node):
 
             self.get_logger().info(f" Delivered to {table_key}")
 
+        # Step 3: After all deliveries
         self.go_to("home")
         response.success = True
         response.message = " All deliveries completed successfully!"
